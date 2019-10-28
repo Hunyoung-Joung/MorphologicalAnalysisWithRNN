@@ -16,6 +16,7 @@ import java.util.List;
 
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
+//import org.bytedeco.javacpp.Loader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -24,16 +25,20 @@ import com.young.homework.util.DataUtilities;
 import org.apache.commons.io.FilenameUtils;
 import org.deeplearning4j.models.embeddings.loader.WordVectorSerializer;
 import org.deeplearning4j.models.embeddings.wordvectors.WordVectors;
-import org.deeplearning4j.nn.conf.GradientNormalization;
-import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
-import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
-import org.deeplearning4j.nn.conf.layers.LSTM;
-import org.deeplearning4j.nn.conf.layers.RnnOutputLayer;
-import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
-import org.deeplearning4j.nn.weights.WeightInit;
-import org.deeplearning4j.optimize.api.InvocationType;
-import org.deeplearning4j.optimize.listeners.EvaluativeListener;
-import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
+import org.deeplearning4j.models.word2vec.Word2Vec;
+//import org.deeplearning4j.nn.conf.GradientNormalization;
+//import org.deeplearning4j.nn.conf.MultiLayerConfiguration;
+//import org.deeplearning4j.nn.conf.NeuralNetConfiguration;
+//import org.deeplearning4j.nn.conf.layers.LSTM;
+//import org.deeplearning4j.nn.conf.layers.RnnOutputLayer;
+//import org.deeplearning4j.nn.multilayer.MultiLayerNetwork;
+//import org.deeplearning4j.nn.weights.WeightInit;
+//import org.deeplearning4j.optimize.api.InvocationType;
+//import org.deeplearning4j.optimize.listeners.EvaluativeListener;
+//import org.deeplearning4j.optimize.listeners.ScoreIterationListener;
+import org.deeplearning4j.text.sentenceiterator.LineSentenceIterator;
+import org.deeplearning4j.text.sentenceiterator.SentenceIterator;
+import org.deeplearning4j.text.sentenceiterator.SentencePreProcessor;
 import org.deeplearning4j.text.tokenization.tokenizer.preprocessor.CommonPreprocessor;
 import org.deeplearning4j.text.tokenization.tokenizerfactory.DefaultTokenizerFactory;
 import org.deeplearning4j.text.tokenization.tokenizerfactory.TokenizerFactory;
@@ -57,19 +62,46 @@ public class MorphologicalAnalysisWithRNN {
 	// Logger
 	private static final Logger logger = LoggerFactory.getLogger(MorphologicalAnalysisWithRNN.class.getSimpleName());
 	
-    /** Data URL for downloading */
-    public static final String DATA_URL = "http://ai.stanford.edu/~amaas/data/sentiment/aclImdb_v1.tar.gz";
-    /** Location to save and extract the training/testing data */
-    public static final String DATA_PATH = FilenameUtils.concat(System.getProperty("java.io.tmpdir"), "dl4j_w2vSentiment/");
-	
 	public static void main(String args[]) {
+		
+		SentenceIterator iter = new LineSentenceIterator(new File("C:\\Users\\root\\workspace\\text-mining-rnn-learning\\storage\\crawl_result.tsv"));
+		iter.setPreProcessor(new SentencePreProcessor() {
+		    @Override
+		    public String preProcess(String sentence) {
+		    	return sentence.toLowerCase();
+		    }
+		});
+		
+		// Split on white spaces in the line to get words
+		TokenizerFactory t = new DefaultTokenizerFactory();
+		t.setTokenPreProcessor(new CommonPreprocessor());
+		
+		int batchSize = 1000;
+		int iterations = 3;
+		int layerSize = 150;
+
+		logger.info("Build model....");
+		Word2Vec vec = new Word2Vec.Builder()
+			.batchSize(batchSize) //# words per minibatch.
+			.minWordFrequency(5) //
+			.useAdaGrad(false) //
+			.layerSize(layerSize) // word feature vector size
+			.iterations(iterations) // # iterations to train
+			.learningRate(0.025) //
+			.minLearningRate(1e-3) // learning rate decays wrt # words. floor learning
+			.negativeSample(10) // sample size 10 words
+			.iterate(iter) //
+			.tokenizerFactory(t)
+			.build();
+		vec.fit();
+
         // Analyzing
-		MorphologicalAnalysisWithRNN morphologicalAnalysisWithRNN = new MorphologicalAnalysisWithRNN();
-        try {
-        	morphologicalAnalysisWithRNN.analyzing();
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+//		MorphologicalAnalysisWithRNN morphologicalAnalysisWithRNN = new MorphologicalAnalysisWithRNN();
+//        try {
+//        	morphologicalAnalysisWithRNN.analyzing();
+//		} catch (IOException e) {
+//			e.printStackTrace();
+//		} 
 	}
 
 	/**
@@ -78,59 +110,7 @@ public class MorphologicalAnalysisWithRNN {
 	 * @throws IOException
 	 */
 	public void analyzing() throws IOException {
-		
-        int batchSize = 64;     //Number of examples in each minibatch
-        int vectorSize = 300;   //Size of the word vectors. 300 in the Google News model
-        int nEpochs = 1;        //Number of epochs (full passes of training data) to train on
-        int truncateReviewsToLength = 256;  //Truncate reviews with length (# words) greater than this
-        final int seed = 0;     //Seed for reproducibility
-
-        Nd4j.getMemoryManager().setAutoGcWindow(10000);  //https://deeplearning4j.org/workspaces
-
-        //Set up network configuration
-        MultiLayerConfiguration conf = new NeuralNetConfiguration.Builder()
-            .seed(seed)
-            .updater(new Adam(5e-3))
-            .l2(1e-5)
-            .weightInit(WeightInit.XAVIER)
-            .gradientNormalization(GradientNormalization.ClipElementWiseAbsoluteValue).gradientNormalizationThreshold(1.0)
-            .list()
-            .layer(new LSTM.Builder().nIn(vectorSize).nOut(256)
-                .activation(Activation.TANH).build())
-            .layer(new RnnOutputLayer.Builder().activation(Activation.SOFTMAX)
-                .lossFunction(LossFunctions.LossFunction.MCXENT).nIn(256).nOut(2).build())
-            .build();
-
-        MultiLayerNetwork net = new MultiLayerNetwork(conf);
-        net.init();
-
-        //DataSetIterators for training and testing respectively
-        WordVectors wordVectors = WordVectorSerializer.loadStaticModel(new File(HtmlCrawlerCtrl.CRAWL_RESULT));
-        com.young.homework.util.SentimentExampleIterator train = new com.young.homework.util.SentimentExampleIterator(DATA_PATH, wordVectors, batchSize, truncateReviewsToLength, true);
-        com.young.homework.util.SentimentExampleIterator test = new com.young.homework.util.SentimentExampleIterator(DATA_PATH, wordVectors, batchSize, truncateReviewsToLength, false);
-
-        System.out.println("Starting training");
-        net.setListeners(new ScoreIterationListener(1), new EvaluativeListener(test, 1, InvocationType.EPOCH_END));
-        net.fit(train, nEpochs);
-
-        //After training: load a single example and generate predictions
-        File shortNegativeReviewFile = new File(FilenameUtils.concat(DATA_PATH, "aclImdb/test/neg/12100_1.txt"));
-        String shortNegativeReview = FileUtils.readFileToString(shortNegativeReviewFile, (Charset)null);
-
-        INDArray features = test.loadFeaturesFromString(shortNegativeReview, truncateReviewsToLength);
-        INDArray networkOutput = net.output(features);
-        long timeSeriesLength = networkOutput.size(2);
-        INDArray probabilitiesAtLastWord = networkOutput.get(NDArrayIndex.point(0), NDArrayIndex.all(), NDArrayIndex.point(timeSeriesLength - 1));
-
-        System.out.println("\n\n-------------------------------");
-        System.out.println("Short negative review: \n" + shortNegativeReview);
-        System.out.println("\n\nProbabilities at last time step:");
-        System.out.println("p(positive): " + probabilitiesAtLastWord.getDouble(0));
-        System.out.println("p(negative): " + probabilitiesAtLastWord.getDouble(1));
-
-        System.out.println("----- Example complete -----");
-		
-		
+				
 //    	BufferedReader reader;
 //    	BufferedWriter fileWriter = new BufferedWriter(new OutputStreamWriter(new FileOutputStream(HtmlCrawlerCtrl.CRAWL_RESULT), "utf-8"));
 //		try {
